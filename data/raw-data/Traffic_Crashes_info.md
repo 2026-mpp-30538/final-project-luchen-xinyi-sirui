@@ -1,6 +1,6 @@
 # Traffic_Crashes_Raw_Dataset
 
-This dataset is too large (~600MB) to store directly in this GitHub repository. It is publicly available from the City of Chicago Data Portal:
+This dataset is too large to store directly in this GitHub repository. It is publicly available from the City of Chicago Data Portal:
 
 Source:
 City of Chicago Data Portal  
