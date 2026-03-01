@@ -1,0 +1,519 @@
+---
+title: "Chicago cameras crashes"
+format: html
+  toc: ture
+  code-fold: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{python}
+import pandas as pd
+import numpy as np
+import geopandas as gpd
+from shapely import wkt
+import altair as alt
+import json
+
+alt.data_transformers.disable_max_rows()
+
+SPEED_FP = "/Users/xinyi/Desktop/final-project-luchen-xinyi-sirui/data/raw-data/Speed_Camera_Locations_20260222.csv"
+COMM_FP  = "/Users/xinyi/Desktop/final-project-luchen-xinyi-sirui/data/raw-data/Boundaries_-_Community_Areas_20260122.csv"
+CRASH_FP = "/Users/xinyi/Desktop/Traffic_Crashes_-_Crashes_20260224.csv"
+RED_FP   = "/Users/xinyi/Desktop/final-project-luchen-xinyi-sirui/data/raw-data/Red_Light_Camera_Locations_20260122.csv"
+
+speed = pd.read_csv(SPEED_FP)
+comm  = pd.read_csv(COMM_FP)
+crash = pd.read_csv(CRASH_FP)
+redlight = pd.read_csv(RED_FP)
+```
+
+```{python}
+speed.head()
+```
+
+clean speed data
+```{python}
+speed["GO-LIVE DATE"] = pd.to_datetime(speed["GO-LIVE DATE"], errors="coerce")
+speed["year"] = speed["GO-LIVE DATE"].dt.year
+
+speed = speed.dropna(subset=["LATITUDE", "LONGITUDE"])
+speed["LATITUDE"] = pd.to_numeric(speed["LATITUDE"], errors="coerce")
+speed["LONGITUDE"] = pd.to_numeric(speed["LONGITUDE"], errors="coerce")
+
+speed[["GO-LIVE DATE","year","LATITUDE","LONGITUDE"]].head()
+```
+
+geodataframe
+```{python}
+comm_gdf = gpd.GeoDataFrame(
+    comm.copy(),
+    geometry=comm["the_geom"].apply(wkt.loads),
+    crs="EPSG:4326"
+)
+
+comm_gdf.head()
+```
+
+```{python}
+speed_gdf = gpd.GeoDataFrame(
+    speed.copy(),
+    geometry=gpd.points_from_xy(speed["LONGITUDE"], speed["LATITUDE"]),
+    crs="EPSG:4326"
+)
+
+speed_comm = gpd.sjoin(speed_gdf, comm_gdf, how="left", predicate="within")
+
+camera_counts = (
+    speed_comm.groupby("COMMUNITY")
+    .size()
+    .reset_index(name="num_cameras")
+)
+
+comm_gdf = comm_gdf.merge(camera_counts, on="COMMUNITY", how="left")
+comm_gdf["num_cameras"] = comm_gdf["num_cameras"].fillna(0).astype(int)
+
+camera_counts.sort_values("num_cameras", ascending=False).head(10)
+```
+
+```{python}
+PALETTE_MAIN = ["#e0f3db", "#a8ddb5", "#43a2ca"]
+PALETTE_CONTRAST = ["#fee8c8", "#fdbb84", "#e34a33"]
+```
+
+```{python}
+def map_speed_cameras(comm_gdf, speed_gdf, palette, title):
+    comm_geojson = json.loads(comm_gdf.to_json())
+    points_df = speed_gdf[["LONGITUDE","LATITUDE"]].dropna().copy()
+
+    base = (
+        alt.Chart(alt.Data(values=comm_geojson["features"]))
+        .mark_geoshape(stroke="white", strokeWidth=0.5)
+        .encode(
+            color=alt.Color(
+                "properties.num_cameras:Q",
+                scale=alt.Scale(range=palette), 
+                legend=alt.Legend(title="Speed cameras")
+            ),
+            tooltip=[
+                alt.Tooltip("properties.COMMUNITY:N", title="Community"),
+                alt.Tooltip("properties.num_cameras:Q", title="Num cameras"),
+            ],
+        )
+        .project(type="mercator")
+        .properties(width=650, height=650, title=title)
+    )
+
+    pts = (
+        alt.Chart(points_df)
+        .mark_circle(size=12, opacity=0.5, color=palette[-1])
+        .encode(longitude="LONGITUDE:Q", latitude="LATITUDE:Q")
+    )
+
+    return base + pts
+
+map_speed_cameras(comm_gdf, speed_gdf, PALETTE_MAIN, "Speed cameras by community")
+```
+
+
+Speed cameras are spatially concentrated rather than evenly distributed across Chicago community areas. Several neighborhoods exhibit substantially higher deployment intensity.
+
+
+clean red light data
+```{python}
+redlight["GO LIVE DATE"] = pd.to_datetime(redlight["GO LIVE DATE"], errors="coerce")
+redlight["year"] = redlight["GO LIVE DATE"].dt.year
+
+redlight["LATITUDE"] = pd.to_numeric(redlight["LATITUDE"], errors="coerce")
+redlight["LONGITUDE"] = pd.to_numeric(redlight["LONGITUDE"], errors="coerce")
+redlight = redlight.dropna(subset=["LATITUDE", "LONGITUDE"]).copy()
+
+redlight[["GO LIVE DATE", "year", "LATITUDE", "LONGITUDE"]].head()
+
+```
+
+```{python}
+red_gdf = gpd.GeoDataFrame(
+    redlight.copy(),
+    geometry=gpd.points_from_xy(redlight["LONGITUDE"], redlight["LATITUDE"]),
+    crs="EPSG:4326"
+)
+
+red_comm = gpd.sjoin(red_gdf, comm_gdf, how="left", predicate="within")
+
+red_counts = (
+    red_comm.groupby("COMMUNITY")
+    .size()
+    .reset_index(name="num_red_cameras")
+)
+
+comm_red_gdf = comm_gdf.merge(red_counts, on="COMMUNITY", how="left")
+comm_red_gdf["num_red_cameras"] = comm_red_gdf["num_red_cameras"].fillna(0).astype(int)
+
+red_counts.sort_values("num_red_cameras", ascending=False).head(10)
+```
+
+```{python}
+def map_redlight_cameras(comm_gdf_in, red_gdf_in, palette, title):
+    comm_geojson = json.loads(comm_gdf_in.to_json())
+    points_df = red_gdf_in[["LONGITUDE","LATITUDE"]].dropna().copy()
+
+    base = (
+        alt.Chart(alt.Data(values=comm_geojson["features"]))
+        .mark_geoshape(stroke="white", strokeWidth=0.5)
+        .encode(
+            color=alt.Color(
+                "properties.num_red_cameras:Q",
+                scale=alt.Scale(range=palette),
+                legend=alt.Legend(title="Red light cameras")
+            ),
+            tooltip=[
+                alt.Tooltip("properties.COMMUNITY:N", title="Community"),
+                alt.Tooltip("properties.num_red_cameras:Q", title="Num red light cameras"),
+            ],
+        )
+        .project(type="mercator")
+        .properties(width=650, height=650, title=title)
+    )
+
+    pts = (
+        alt.Chart(points_df)
+        .mark_circle(size=12, opacity=0.5, color=palette[-1], stroke="white", strokeWidth=0.2)
+        .encode(longitude="LONGITUDE:Q", latitude="LATITUDE:Q")
+    )
+
+    return base + pts
+
+map_redlight_cameras(comm_red_gdf, red_gdf, PALETTE_CONTRAST, "Red light cameras by community")
+```
+
+
+speed data
+```{python}
+speed.describe(include="all")
+```
+
+```{python}
+speed["year"] = speed["GO-LIVE DATE"].dt.year
+
+alt.Chart(speed).mark_bar().encode(
+    x=alt.X("year:O", title="Go Live Year"),
+    y=alt.Y("count():Q", title="Number of Cameras"),
+    tooltip=["year", "count()"]
+).properties(
+    width=700,
+    height=400,
+    title="Speed Camera Deployment by Year"
+)
+```
+
+Speed camera deployment in Chicago occurred in distinct waves. The first major rollout took place between 2013 and 2014, accounting for over half of all installations. After a period of relative stability, a second expansion began in 2023 and intensified in 2025. This staggered adoption pattern implies that treatment timing varies across locations, requiring an event-time framework for causal analysis.
+
+
+clean crash data
+```{python}
+import pandas as pd
+
+cols = pd.read_csv(CRASH_FP, nrows=0).columns.tolist()
+len(cols)
+crash.columns
+```
+```{python}
+crash["CRASH_DATE"] = pd.to_datetime(crash["CRASH_DATE"], errors="coerce")
+crash["CRASH_DATE"].min()
+crash["CRASH_DATE"].max()
+```
+Crash data began since 2013-03，but the camera that came to live in 2013 did not have an enough “pre period”.
+
+```{python}
+speed_2nd = speed[speed["GO-LIVE DATE"] >= "2023-01-01"].copy()
+len(speed_2nd)
+speed_2nd.columns
+```
+
+200m buffer
+```{python}
+speed_2nd_gdf = gpd.GeoDataFrame(
+    speed_2nd,
+    geometry=gpd.points_from_xy(speed_2nd["LONGITUDE"],
+                                 speed_2nd["LATITUDE"]),
+    crs="EPSG:4326"
+)
+
+# meter coordinates
+speed_2nd_gdf = speed_2nd_gdf.to_crs(epsg=26971)
+
+# 200m buffer
+speed_2nd_gdf["geometry"] = speed_2nd_gdf.buffer(200)
+```
+
+crash data geodataframe
+```{python}
+crash_gdf = gpd.GeoDataFrame(
+    crash,
+    geometry=gpd.points_from_xy(crash["LONGITUDE"],
+                                 crash["LATITUDE"]),
+    crs="EPSG:4326"
+)
+
+crash_gdf = crash_gdf.to_crs(epsg=26971)
+```
+
+spatial join
+```{python}
+crash_camera = gpd.sjoin(
+    crash_gdf,
+    speed_2nd_gdf[["LOCATION ID", "GO-LIVE DATE", "geometry"]],
+    how="inner",
+    predicate="within"
+)
+```
+
+event time
+```{python}
+crash_camera["crash_month"] = crash_camera["CRASH_DATE"].dt.to_period("M")
+crash_camera["go_live_month"] = crash_camera["GO-LIVE DATE"].dt.to_period("M")
+
+crash_camera["event_time"] = (
+    crash_camera["crash_month"] -
+    crash_camera["go_live_month"]
+).apply(lambda x: x.n)
+
+crash_camera = crash_camera[
+    (crash_camera["event_time"] >= -24) &
+    (crash_camera["event_time"] <= 24)
+]
+
+panel = (
+    crash_camera
+    .groupby(["LOCATION ID", "event_time"])
+    .size()
+    .reset_index(name="crash_count")
+)
+
+event_avg = (
+    panel
+    .groupby("event_time")["crash_count"]
+    .mean()
+    .reset_index()
+)
+```
+
+```{python}
+alt.Chart(event_avg).mark_line(point=True).encode(
+    x=alt.X("event_time:Q",
+            title="Months Since Installation"),
+    y=alt.Y("crash_count:Q",
+            title="Average Monthly Crashes per Speed Camera")
+).properties(
+    width=700,
+    height=400,
+    title="Event Study: Average Crashes per Speed Camera"
+)
+```
+
+We evaluate the impact of speed camera installation on traffic crashes using a staggered event study design. By spatially matching crash incidents within 200 meters of each camera and aligning time relative to installation month, we examine crash trends 24 months before and after deployment. The pre-treatment trend appears stable, suggesting no evidence of anticipatory decline. Following installation, average monthly crashes per camera decline by approximately 15–25%, indicating that speed cameras are associated with a meaningful reduction in local crash frequency.
+
+
+
+
+clean red light data
+```{python}
+redlight.columns
+```
+
+```{python}
+redlight["GO LIVE DATE"] = pd.to_datetime(redlight["GO LIVE DATE"], errors="coerce")
+
+redlight["GO LIVE DATE"].min(), redlight["GO LIVE DATE"].max()
+```
+
+Since there are FIRST/SECOND/THIRD APPROACH，the same INTERSECTION may appear repeatedly.
+```{python}
+redlight["INTERSECTION"].nunique(), len(redlight)
+```
+For the same interaction, take the earliest GO LIVE DATE.
+```{python}
+redlight_intersection = (
+    redlight.sort_values("GO LIVE DATE")
+      .groupby("INTERSECTION", as_index=False)
+      .agg({
+          "GO LIVE DATE": "min",
+          "LATITUDE": "first",
+          "LONGITUDE": "first",
+          "LOCATION": "first"
+      })
+)
+
+redlight_intersection.shape, redlight_intersection.head()
+
+redlight_intersection["install_year"] = redlight_intersection["GO LIVE DATE"].dt.year
+redlight_intersection["install_year"].value_counts().sort_index()
+```
+
+```{python}
+import geopandas as gpd
+
+redlight_gdf = gpd.GeoDataFrame(
+    redlight_intersection,
+    geometry=gpd.points_from_xy(redlight_intersection["LONGITUDE"], redlight_intersection["LATITUDE"]),
+    crs="EPSG:4326"
+)
+redlight_gdf.head()
+```
+
+200 buffer
+```{python}
+redlight_proj = redlight_gdf.to_crs(epsg=26971)
+crash_proj = crash_gdf.to_crs(epsg=26971)
+
+redlight_proj["buffer_200m"] = redlight_proj.geometry.buffer(200)
+
+buffer_gdf = redlight_proj.set_geometry("buffer_200m")
+```
+
+```{python}
+crash_camera = gpd.sjoin(
+    crash_proj,
+    buffer_gdf,
+    predicate="within",
+    how="inner"
+)
+
+crash_camera["CRASH_DATE"] = pd.to_datetime(crash_camera["CRASH_DATE"], errors="coerce")
+crash_camera["GO LIVE DATE"] = pd.to_datetime(crash_camera["GO LIVE DATE"], errors="coerce")
+```
+
+
+```{python}
+import pandas as pd
+
+window = pd.Timedelta(days=365)
+
+# recalculate time difference
+crash_camera["time_diff"] = crash_camera["CRASH_DATE"] - crash_camera["GO LIVE DATE"]
+
+# previous and post 1 year
+crash_camera_1y = crash_camera.loc[
+    (crash_camera["time_diff"] >= -window) &
+    (crash_camera["time_diff"] < window)
+].copy()
+
+crash_camera_1y["before_after_1y"] = crash_camera_1y["time_diff"].apply(
+    lambda x: "Before" if x < pd.Timedelta(0) else "After"
+)
+```
+
+```{python}
+summary_1y = (
+    crash_camera_1y.groupby("before_after_1y")
+    .size()
+    .reindex(["Before", "After"])
+    .reset_index(name="crash_count")
+)
+
+summary_1y
+```
+
+```{python}
+import matplotlib.pyplot as plt
+
+plt.bar(summary_1y["before_after_1y"], summary_1y["crash_count"])
+plt.title("Crash Count 1-Year Before vs 1-Year After (within 200m)")
+plt.ylabel("Crash Count")
+plt.show()
+```
+
+
+```{python}
+intersection_summary = (
+    crash_camera_1y
+    .groupby(["INTERSECTION", "before_after_1y"])
+    .size()
+    .unstack(fill_value=0)
+)
+
+intersection_summary["change"] = (
+    intersection_summary["After"] - intersection_summary["Before"]
+)
+
+intersection_summary.head()
+
+intersection_summary["change"].describe()
+
+plt.hist(intersection_summary["change"], bins=30)
+plt.title("Distribution of Crash Change (After - Before)")
+plt.xlabel("Change in Crash Count")
+plt.ylabel("Number of Intersections")
+plt.show()
+```
+
+```{python}
+crash_gdf["CRASH_DATE"].min(), crash_gdf["CRASH_DATE"].max()
+```
+
+```{python}
+len(intersection_summary)
+```
+
+```{python}
+crash_camera_1y.shape
+```
+
+```{python}
+crash_camera.head()
+crash_camera["crash_year"] = crash_camera["CRASH_DATE"].dt.year
+panel = (
+    crash_camera
+    .groupby(["INTERSECTION", "crash_year"])
+    .size()
+    .reset_index(name="crash_count")
+)
+
+panel.head()
+```
+
+```{python}
+redlight_intersection[["INTERSECTION", "install_year"]]
+panel = panel.merge(
+    redlight_intersection[["INTERSECTION", "install_year"]],
+    on="INTERSECTION",
+    how="left"
+)
+
+panel.head()
+```
+
+```{python}
+panel["event_time"] = panel["crash_year"] - panel["install_year"]
+
+panel_event = panel.loc[
+    (panel["event_time"] >= -5) &
+    (panel["event_time"] <= 5)
+].copy()
+
+event_avg = (
+    panel_event
+    .groupby("event_time")["crash_count"]
+    .mean()
+    .reset_index()
+)
+
+event_avg
+```
+
+```{python}
+import altair as alt
+
+chart = alt.Chart(event_avg).mark_line(point=True).encode(
+    x=alt.X("event_time:Q", title="Years Relative to Camera Installation"),
+    y=alt.Y("crash_count:Q", title="Average Crash Count (within 200m)"),
+    tooltip=["event_time", "crash_count"]
+).properties(
+    title="Event Study: Crash Trends Around Red Light Camera Installation"
+)
+
+chart
+```
